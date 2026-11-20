@@ -317,6 +317,28 @@ private suspend fun loadMusicData(): Pair<List<Artist>, List<Song>> =
     }
 
 private fun fetchApiArray(action: String): List<JSONObject> {
+    var lastError: Exception? = null
+
+    // Apps Script ContentService 會先回傳 302，再導向一次性 googleusercontent URL。
+    // Google 端偶爾會在重新導向後短暫回傳 404；這裡只重試唯讀 GET。
+    repeat(3) { attempt ->
+        try {
+            return fetchApiArrayOnce(action)
+        } catch (error: Exception) {
+            lastError = error
+            if (attempt < 2) {
+                Thread.sleep(1_000L * (attempt + 1))
+            }
+        }
+    }
+
+    throw IllegalStateException(
+        "讀取 $action 連續 3 次失敗。最後錯誤：${lastError?.message ?: "未知錯誤"}",
+        lastError
+    )
+}
+
+private fun fetchApiArrayOnce(action: String): List<JSONObject> {
     val connection = URL("$API_URL?action=$action").openConnection()
         as HttpURLConnection
 
@@ -341,8 +363,8 @@ private fun fetchApiArray(action: String): List<JSONObject> {
 
         if (statusCode !in 200..299) {
             throw IllegalStateException(
-                "讀取 $action 失敗（HTTP $statusCode）。" +
-                    if (responseText.isNotBlank()) " 回應：${responseText.take(250)}" else ""
+                "HTTP $statusCode" +
+                    if (responseText.isNotBlank()) "：${responseText.take(180)}" else ""
             )
         }
 
@@ -350,7 +372,7 @@ private fun fetchApiArray(action: String): List<JSONObject> {
             JSONObject(responseText)
         } catch (error: Exception) {
             throw IllegalStateException(
-                "$action 回傳的不是有效 JSON。回應：${responseText.take(250)}",
+                "回傳的不是有效 JSON：${responseText.take(180)}",
                 error
             )
         }
@@ -361,8 +383,7 @@ private fun fetchApiArray(action: String): List<JSONObject> {
             )
         }
 
-        val data = response.optJSONArray("data")
-            ?: JSONArray()
+        val data = response.optJSONArray("data") ?: JSONArray()
 
         return (0 until data.length()).mapNotNull { index ->
             data.optJSONObject(index)
