@@ -129,13 +129,22 @@ document.addEventListener("DOMContentLoaded", function() {
 function getArtistImagePath(imageURL) {
   const fallbackImage = "./images/暫無圖片.jpg";
 
-  if (!imageURL) {
+  // 清除試算表儲存格前後可能存在的空白或換行。
+  const imageValue = String(imageURL || "").trim();
+
+  if (!imageValue) {
     return fallbackImage;
   }
 
   try {
-    const imagePath = new URL(imageURL, window.location.href).pathname;
-    const fileName = decodeURIComponent(imagePath.split("/").pop());
+    // 完整網址取 pathname；純檔名則直接使用。
+    const imagePath = /^https?:\/\//i.test(imageValue)
+      ? new URL(imageValue).pathname
+      : imageValue.split(/[?#]/, 1)[0];
+
+    const fileName = decodeURIComponent(
+      imagePath.split("/").pop().trim()
+    );
 
     if (!fileName) {
       return fallbackImage;
