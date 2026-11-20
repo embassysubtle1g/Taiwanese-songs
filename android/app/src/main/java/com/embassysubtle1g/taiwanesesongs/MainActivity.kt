@@ -338,56 +338,78 @@ private fun fetchApiArray(action: String): List<JSONObject> {
 }
 
 private fun fetchApiArrayOnce(action: String): List<JSONObject> {
-    val connection = URL("$API_URL?action=$action").openConnection()
-        as HttpURLConnection
+    var currentUrl = URL("$API_URL?action=$action")
 
-    try {
-        connection.requestMethod = "GET"
-        connection.instanceFollowRedirects = true
-        connection.connectTimeout = 20_000
-        connection.readTimeout = 20_000
-        connection.setRequestProperty("Accept", "application/json")
-        connection.setRequestProperty("Cache-Control", "no-cache")
-
-        val statusCode = connection.responseCode
-        val responseStream = if (statusCode in 200..299) {
-            connection.inputStream
-        } else {
-            connection.errorStream
-        }
-        val responseText = responseStream
-            ?.bufferedReader(Charsets.UTF_8)
-            ?.use { it.readText() }
-            .orEmpty()
-
-        if (statusCode !in 200..299) {
-            throw IllegalStateException(
-                "HTTP $statusCode" +
-                    if (responseText.isNotBlank()) "：${responseText.take(180)}" else ""
-            )
+    // 手動跟隨 Apps Script ContentService 的跨網域重新導向。
+    // 不依賴 HttpURLConnection 自動處理 script.google.com -> googleusercontent.com。
+    repeat(6) { redirectCount ->
+        val connection = (currentUrl.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = false
+            connectTimeout = 20_000
+            readTimeout = 20_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Cache-Control", "no-cache")
+            setRequestProperty("User-Agent", "TaiwaneseSongsAndroid/1.0")
         }
 
-        val response = try {
-            JSONObject(responseText)
-        } catch (error: Exception) {
-            throw IllegalStateException(
-                "回傳的不是有效 JSON：${responseText.take(180)}",
-                error
-            )
-        }
+        try {
+            val statusCode = connection.responseCode
+            if (statusCode in listOf(301, 302, 303, 307, 308)) {
+                val location = connection.getHeaderField("Location")
+                    ?: throw IllegalStateException(
+                        "API 重新導向時沒有提供 Location（HTTP $statusCode）。"
+                    )
 
-        if (!response.optBoolean("success")) {
-            throw IllegalStateException(
-                response.optString("error", "API 回傳錯誤。")
-            )
-        }
+                if (redirectCount == 5) {
+                    throw IllegalStateException("API 重新導向超過 5 次。")
+                }
 
-        val data = response.optJSONArray("data") ?: JSONArray()
+                currentUrl = URL(currentUrl, location)
+                return@repeat
+            }
 
-        return (0 until data.length()).mapNotNull { index ->
-            data.optJSONObject(index)
+            val responseStream = if (statusCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+            val responseText = responseStream
+                ?.bufferedReader(Charsets.UTF_8)
+                ?.use { it.readText() }
+                .orEmpty()
+
+            if (statusCode !in 200..299) {
+                throw IllegalStateException(
+                    "HTTP $statusCode（$currentUrl）：" +
+                        if (responseText.isNotBlank()) responseText.take(180)
+                        else "沒有回應內容"
+                )
+            }
+
+            val response = try {
+                JSONObject(responseText)
+            } catch (error: Exception) {
+                throw IllegalStateException(
+                    "API 回傳的不是有效 JSON（$currentUrl）：${responseText.take(180)}",
+                    error
+                )
+            }
+
+            if (!response.optBoolean("success")) {
+                throw IllegalStateException(
+                    response.optString("error", "API 回傳錯誤。")
+                )
+            }
+
+            val data = response.optJSONArray("data") ?: JSONArray()
+            return (0 until data.length()).mapNotNull { index ->
+                data.optJSONObject(index)
+            }
+        } finally {
+            connection.disconnect()
         }
-    } finally {
-        connection.disconnect()
     }
+
+    throw IllegalStateException("API 重新導向未能完成。")
 }
