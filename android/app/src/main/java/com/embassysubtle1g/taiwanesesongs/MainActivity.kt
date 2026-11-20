@@ -322,14 +322,38 @@ private fun fetchApiArray(action: String): List<JSONObject> {
 
     try {
         connection.requestMethod = "GET"
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 15_000
+        connection.instanceFollowRedirects = true
+        connection.connectTimeout = 20_000
+        connection.readTimeout = 20_000
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Cache-Control", "no-cache")
 
-        val responseText = connection.inputStream
-            .bufferedReader(Charsets.UTF_8)
-            .use { it.readText() }
+        val statusCode = connection.responseCode
+        val responseStream = if (statusCode in 200..299) {
+            connection.inputStream
+        } else {
+            connection.errorStream
+        }
+        val responseText = responseStream
+            ?.bufferedReader(Charsets.UTF_8)
+            ?.use { it.readText() }
+            .orEmpty()
 
-        val response = JSONObject(responseText)
+        if (statusCode !in 200..299) {
+            throw IllegalStateException(
+                "讀取 $action 失敗（HTTP $statusCode）。" +
+                    if (responseText.isNotBlank()) " 回應：${responseText.take(250)}" else ""
+            )
+        }
+
+        val response = try {
+            JSONObject(responseText)
+        } catch (error: Exception) {
+            throw IllegalStateException(
+                "$action 回傳的不是有效 JSON。回應：${responseText.take(250)}",
+                error
+            )
+        }
 
         if (!response.optBoolean("success")) {
             throw IllegalStateException(
