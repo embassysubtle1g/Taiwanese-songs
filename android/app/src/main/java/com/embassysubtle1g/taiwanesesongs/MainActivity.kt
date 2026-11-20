@@ -53,8 +53,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 private const val API_URL =
     "https://script.google.com/macros/s/AKfycbxoFMPM8tuVUImuzEGGPC7_goxO_OBhTCe3oUSNcw3zP7sav9-X5xygVx0DjyycGRi_/exec"
@@ -103,7 +108,7 @@ private fun TaiwaneseSongsApp() {
         errorMessage = null
 
         try {
-            val result = loadMusicData()
+            val result = loadMusicData(context)
             artists = result.first
             songs = result.second
         } catch (error: Exception) {
@@ -288,128 +293,133 @@ private fun SongList(
     }
 }
 
-private suspend fun loadMusicData(): Pair<List<Artist>, List<Song>> {
-    // Apps Script ContentService 會重新導向至 googleusercontent。
-    // 先依序請求，避免同時發出兩個請求造成診斷混淆或觸發 Google 端異常。
-    val artists = withContext(Dispatchers.IO) {
-        fetchApiArray("getArtists").map { item ->
-            Artist(
-                id = item.optString("ArtistID"),
-                name = item.optString("ArtistName"),
-                imageUrl = item.optString("ImageURL")
-            )
-        }
+/**
+ * 使用 WebView 執行 JSONP。
+ *
+ * 網站已經透過 JSONP 正常讀取 Apps Script；Android 也沿用相同方式，
+ * 避免原生 HTTP 用戶端在 Apps Script 跨網域重新導向時遇到 404。
+ */
+private suspend fun loadMusicData(
+    context: android.content.Context
+): Pair<List<Artist>, List<Song>> {
+    val artistsJson = fetchJsonpResponse(context, "getArtists")
+    val artists = parseApiArray(artistsJson).map { item ->
+        Artist(
+            id = item.optString("ArtistID"),
+            name = item.optString("ArtistName"),
+            imageUrl = item.optString("ImageURL")
+        )
     }
 
-    val songs = withContext(Dispatchers.IO) {
-        fetchApiArray("getSongs").map { item ->
-            Song(
-                id = item.optString("SongID"),
-                artistId = item.optString("ArtistID"),
-                name = item.optString("SongName"),
-                youtubeUrl = item.optString("YouTubeURL")
-            )
-        }
+    val songsJson = fetchJsonpResponse(context, "getSongs")
+    val songs = parseApiArray(songsJson).map { item ->
+        Song(
+            id = item.optString("SongID"),
+            artistId = item.optString("ArtistID"),
+            name = item.optString("SongName"),
+            youtubeUrl = item.optString("YouTubeURL")
+        )
     }
 
     return Pair(artists, songs)
 }
 
-private fun fetchApiArray(action: String): List<JSONObject> {
-    var lastError: Exception? = null
+private fun parseApiArray(responseText: String): List<JSONObject> {
+    val response = JSONObject(responseText)
 
-    // Apps Script ContentService 會先回傳 302，再導向一次性 googleusercontent URL。
-    // Google 端偶爾會在重新導向後短暫回傳 404；這裡只重試唯讀 GET。
-    repeat(3) { attempt ->
-        try {
-            return fetchApiArrayOnce(action)
-        } catch (error: Exception) {
-            lastError = error
-            if (attempt < 2) {
-                Thread.sleep(1_000L * (attempt + 1))
-            }
-        }
+    if (!response.optBoolean("success")) {
+        throw IllegalStateException(
+            response.optString("error", "API 回傳錯誤。")
+        )
     }
 
-    throw IllegalStateException(
-        "讀取 $action 連續 3 次失敗。最後錯誤：${lastError?.message ?: "未知錯誤"}",
-        lastError
-    )
+    val data = response.optJSONArray("data") ?: JSONArray()
+    return (0 until data.length()).mapNotNull { index ->
+        data.optJSONObject(index)
+    }
 }
 
-private fun fetchApiArrayOnce(action: String): List<JSONObject> {
-    var currentUrl = URL("$API_URL?action=$action")
+/**
+ * 建立短暫的 WebView，透過 JSONP 取得 Apps Script 回應。
+ * WebView 不會顯示在畫面上，只負責完成資料請求。
+ */
+private suspend fun fetchJsonpResponse(
+    context: android.content.Context,
+    action: String
+): String = withTimeout(30_000L) {
+    withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine { continuation ->
+            val webView = WebView(context.applicationContext)
+            webView.settings.javaScriptEnabled = true
+            
+            fun finishWithResult(result: String?, error: Throwable?) {
+                webView.post {
+                    if (continuation.isActive) {
+                        if (error != null) {
+                            continuation.resumeWithException(error)
+                        } else {
+                            continuation.resume(result.orEmpty())
+                        }
+                    }
+                    webView.stopLoading()
+                    webView.removeJavascriptInterface("AndroidBridge")
+                    webView.destroy()
+                }
+            }
 
-    // 手動跟隨 Apps Script ContentService 的跨網域重新導向。
-    // 不依賴 HttpURLConnection 自動處理 script.google.com -> googleusercontent.com。
-    repeat(6) { redirectCount ->
-        val connection = (currentUrl.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            instanceFollowRedirects = false
-            connectTimeout = 20_000
-            readTimeout = 20_000
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Cache-Control", "no-cache")
-            setRequestProperty("User-Agent", "TaiwaneseSongsAndroid/1.0")
-        }
-
-        try {
-            val statusCode = connection.responseCode
-            if (statusCode in listOf(301, 302, 303, 307, 308)) {
-                val location = connection.getHeaderField("Location")
-                    ?: throw IllegalStateException(
-                        "API 重新導向時沒有提供 Location（HTTP $statusCode）。"
-                    )
-
-                if (redirectCount == 5) {
-                    throw IllegalStateException("API 重新導向超過 5 次。")
+            val bridge = object {
+                @JavascriptInterface
+                fun onResponse(response: String) {
+                    finishWithResult(response, null)
                 }
 
-                currentUrl = URL(currentUrl, location)
-                return@repeat
+                @JavascriptInterface
+                fun onError(message: String) {
+                    finishWithResult(
+                        null,
+                        IllegalStateException("JSONP 讀取 $action 失敗：$message")
+                    )
+                }
             }
 
-            val responseStream = if (statusCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            }
-            val responseText = responseStream
-                ?.bufferedReader(Charsets.UTF_8)
-                ?.use { it.readText() }
-                .orEmpty()
+            webView.addJavascriptInterface(bridge, "AndroidBridge")
+            webView.webViewClient = WebViewClient()
 
-            if (statusCode !in 200..299) {
-                throw IllegalStateException(
-                    "HTTP $statusCode（$currentUrl）：" +
-                        if (responseText.isNotBlank()) responseText.take(180)
-                        else "沒有回應內容"
-                )
+            continuation.invokeOnCancellation {
+                webView.post {
+                    webView.stopLoading()
+                    webView.removeJavascriptInterface("AndroidBridge")
+                    webView.destroy()
+                }
             }
 
-            val response = try {
-                JSONObject(responseText)
-            } catch (error: Exception) {
-                throw IllegalStateException(
-                    "API 回傳的不是有效 JSON（$currentUrl）：${responseText.take(180)}",
-                    error
-                )
-            }
+            val html = """
+                <!doctype html>
+                <html>
+                  <head><meta charset="utf-8"></head>
+                  <body>
+                    <script>
+                      window.taiwaneseSongsCallback = function(response) {
+                        AndroidBridge.onResponse(JSON.stringify(response));
+                      };
+                      const script = document.createElement('script');
+                      script.src = '$API_URL?action=$action&callback=taiwaneseSongsCallback';
+                      script.onerror = function() {
+                        AndroidBridge.onError('無法載入 Apps Script 回應');
+                      };
+                      document.head.appendChild(script);
+                    </script>
+                  </body>
+                </html>
+            """.trimIndent()
 
-            if (!response.optBoolean("success")) {
-                throw IllegalStateException(
-                    response.optString("error", "API 回傳錯誤。")
-                )
-            }
-
-            val data = response.optJSONArray("data") ?: JSONArray()
-            return (0 until data.length()).mapNotNull { index ->
-                data.optJSONObject(index)
-            }
-        } finally {
-            connection.disconnect()
+            webView.loadDataWithBaseURL(
+                "https://script.google.com/",
+                html,
+                "text/html",
+                "UTF-8",
+                null
+            )
         }
     }
-
-    throw IllegalStateException("API 重新導向未能完成。")
 }
