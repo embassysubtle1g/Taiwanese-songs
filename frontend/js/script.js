@@ -124,6 +124,31 @@ document.addEventListener("DOMContentLoaded", function() {
 });
 
 
+// 將 Google Sheets 的圖片網址轉成專案內的圖片路徑。
+// 舊資料即使仍是完整網址，也只取檔名，因此不必一次修改試算表。
+function getArtistImagePath(imageURL) {
+  const fallbackImage = "./images/暫無圖片.jpg";
+
+  if (!imageURL) {
+    return fallbackImage;
+  }
+
+  try {
+    const imagePath = new URL(imageURL, window.location.href).pathname;
+    const fileName = decodeURIComponent(imagePath.split("/").pop());
+
+    if (!fileName) {
+      return fallbackImage;
+    }
+
+    return "./images/" + encodeURIComponent(fileName);
+  } catch (error) {
+    console.error("圖片網址格式錯誤：", imageURL, error);
+    return fallbackImage;
+  }
+}
+
+
 function showArtists(artists) {
 
   const container =
@@ -134,15 +159,25 @@ function showArtists(artists) {
   artists.forEach(artist => {
 
     const div = document.createElement("div");
-
     div.className = "artist";
 
-    div.innerHTML = `
-      <img src="${artist.ImageURL}">
-      <div class="artist-name">
-        ${artist.ArtistName}
-      </div>
-    `;
+    const img = document.createElement("img");
+    img.src = getArtistImagePath(artist.ImageURL);
+    img.alt = artist.ArtistName || "歌手圖片";
+    img.loading = "lazy";
+
+    // 若圖片不存在，改用專案內的預設圖片。
+    img.onerror = function() {
+      this.onerror = null;
+      this.src = "./images/暫無圖片.jpg";
+    };
+
+    const name = document.createElement("div");
+    name.className = "artist-name";
+    name.textContent = artist.ArtistName || "";
+
+    div.appendChild(img);
+    div.appendChild(name);
 
     div.onclick = function() {
       showSongs(artist.ArtistID, artist.ArtistName);
@@ -256,6 +291,15 @@ function showArtistsPage() {
 
 function playSong(url) {
 
-  window.open(url, "_blank");
+  // Android App 內直接在目前的 WebView 開啟 YouTube；
+  // 一般瀏覽器則維持原本另開新分頁的行為。
+  const isAndroidApp =
+    new URLSearchParams(window.location.search).get("app") === "android";
+
+  if (isAndroidApp) {
+    window.location.href = url;
+  } else {
+    window.open(url, "_blank");
+  }
 
 }
