@@ -50,8 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -290,31 +288,32 @@ private fun SongList(
     }
 }
 
-private suspend fun loadMusicData(): Pair<List<Artist>, List<Song>> =
-    coroutineScope {
-        val artistsDeferred = async(Dispatchers.IO) {
-            fetchApiArray("getArtists").map { item ->
-                Artist(
-                    id = item.optString("ArtistID"),
-                    name = item.optString("ArtistName"),
-                    imageUrl = item.optString("ImageURL")
-                )
-            }
+private suspend fun loadMusicData(): Pair<List<Artist>, List<Song>> {
+    // Apps Script ContentService 會重新導向至 googleusercontent。
+    // 先依序請求，避免同時發出兩個請求造成診斷混淆或觸發 Google 端異常。
+    val artists = withContext(Dispatchers.IO) {
+        fetchApiArray("getArtists").map { item ->
+            Artist(
+                id = item.optString("ArtistID"),
+                name = item.optString("ArtistName"),
+                imageUrl = item.optString("ImageURL")
+            )
         }
-
-        val songsDeferred = async(Dispatchers.IO) {
-            fetchApiArray("getSongs").map { item ->
-                Song(
-                    id = item.optString("SongID"),
-                    artistId = item.optString("ArtistID"),
-                    name = item.optString("SongName"),
-                    youtubeUrl = item.optString("YouTubeURL")
-                )
-            }
-        }
-
-        Pair(artistsDeferred.await(), songsDeferred.await())
     }
+
+    val songs = withContext(Dispatchers.IO) {
+        fetchApiArray("getSongs").map { item ->
+            Song(
+                id = item.optString("SongID"),
+                artistId = item.optString("ArtistID"),
+                name = item.optString("SongName"),
+                youtubeUrl = item.optString("YouTubeURL")
+            )
+        }
+    }
+
+    return Pair(artists, songs)
+}
 
 private fun fetchApiArray(action: String): List<JSONObject> {
     var lastError: Exception? = null
