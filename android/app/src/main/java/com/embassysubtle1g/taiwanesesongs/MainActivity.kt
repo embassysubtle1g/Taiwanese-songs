@@ -18,7 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 
 private const val WEBSITE_URL =
-    "https://embassysubtle1g.github.io/Taiwanese-songs/"
+    "https://embassysubtle1g.github.io/Taiwanese-songs/?app=android"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,11 +47,23 @@ class MainActivity : ComponentActivity() {
                                 request: WebResourceRequest
                             ): Boolean {
                                 val uri = request.url
+                                val host = uri.host?.lowercase()
                                 val isAppWebsite =
                                     uri.scheme == "https" &&
-                                    uri.host == "embassysubtle1g.github.io"
+                                    host == "embassysubtle1g.github.io"
+                                val isYouTube =
+                                    uri.scheme == "https" &&
+                                    host in setOf(
+                                        "youtube.com",
+                                        "www.youtube.com",
+                                        "m.youtube.com",
+                                        "youtu.be",
+                                        "www.youtu.be",
+                                        "youtube-nocookie.com",
+                                        "www.youtube-nocookie.com"
+                                    )
 
-                                if (isAppWebsite) {
+                                if (isAppWebsite || isYouTube) {
                                     return false
                                 }
 
