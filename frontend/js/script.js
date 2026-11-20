@@ -256,6 +256,15 @@ function showArtistsPage() {
 
 function playSong(url) {
 
-  window.open(url, "_blank");
+  // Android App 內直接在目前的 WebView 開啟 YouTube；
+  // 一般瀏覽器則維持原本另開新分頁的行為。
+  const isAndroidApp =
+    new URLSearchParams(window.location.search).get("app") === "android";
+
+  if (isAndroidApp) {
+    window.location.href = url;
+  } else {
+    window.open(url, "_blank");
+  }
 
 }
