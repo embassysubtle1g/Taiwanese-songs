@@ -1,3 +1,64 @@
+// Google Apps Script Web App API
+const API_URL =
+  "https://script.google.com/macros/s/AKfycbxoFMPM8tuVUIMuzEGGPC7_goxO_OBhTCe3oUSNcw3zP7sav9-X5xygVx0DjyycGRi_/exec";
+
+// 使用 JSONP 呼叫 Apps Script，避免 GitHub Pages 跨網域讀取 JSON 時的 CORS 問題。
+function callApi(action) {
+  return new Promise((resolve, reject) => {
+    const callbackName =
+      "taiwaneseSongsCallback_" +
+      Date.now() +
+      "_" +
+      Math.random().toString(36).slice(2);
+
+    const script = document.createElement("script");
+    let timeoutId;
+
+    function cleanup() {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      delete window[callbackName];
+      script.remove();
+    }
+
+    window[callbackName] = function(response) {
+      cleanup();
+
+      if (!response || response.success !== true) {
+        reject(new Error(
+          response && response.error
+            ? response.error
+            : "API 回傳資料格式不正確。"
+        ));
+        return;
+      }
+
+      resolve(response.data);
+    };
+
+    script.onerror = function() {
+      cleanup();
+      reject(new Error("無法連線至歌曲資料 API。"));
+    };
+
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error("API 回應逾時，請稍後再試。"));
+    }, 15000);
+
+    const params = new URLSearchParams({
+      action: action,
+      callback: callbackName
+    });
+
+    script.src = API_URL + "?" + params.toString();
+    document.head.appendChild(script);
+  });
+}
+
+
 // 儲存所有歌曲資料
 let allSongs = [];
 
@@ -12,15 +73,18 @@ document.addEventListener("DOMContentLoaded", function() {
 
   document.getElementById("backButton").style.display = "none";
 
-  // 暫時保留原本 Apps Script 呼叫方式。
-  // GitHub Pages 版本尚未接上 JSON API；完成 API 後會在下一階段替換這裡。
-  google.script.run
-    .withSuccessHandler(showArtists)
-    .getArtists();
+  // 載入歌手資料
+  callApi("getArtists")
+    .then(showArtists)
+    .catch(function(error) {
+      document.getElementById("loading").style.display = "none";
+      console.error("歌手載入失敗", error);
+      alert("歌手資料載入失敗，請重新整理頁面");
+    });
 
   // 背景載入歌曲
-  google.script.run
-    .withSuccessHandler(function(songs) {
+  callApi("getSongs")
+    .then(function(songs) {
 
       // 儲存歌曲資料
       allSongs = songs;
@@ -46,7 +110,7 @@ document.addEventListener("DOMContentLoaded", function() {
       }
 
     })
-    .withFailureHandler(function(error) {
+    .catch(function(error) {
 
       // 載入失敗也要關閉 Loading
       document.getElementById("loading").style.display = "none";
@@ -55,8 +119,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
       alert("歌曲資料載入失敗，請重新整理頁面");
 
-    })
-    .getSongs();
+    });
 
 });
 
