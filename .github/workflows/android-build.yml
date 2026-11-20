@@ -3,13 +3,15 @@ name: Android build
 on:
   push:
     branches:
-      - feature/android-app
+      - main
     paths:
       - "android/**"
+      - "frontend/images/Taiwanese_songs.png"
       - ".github/workflows/android-build.yml"
   pull_request:
     paths:
       - "android/**"
+      - "frontend/images/Taiwanese_songs.png"
       - ".github/workflows/android-build.yml"
   workflow_dispatch:
 
@@ -28,6 +30,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Prepare app launcher icon
+        run: |
+          mkdir -p android/app/src/main/res/drawable-nodpi
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/frontend/images/Taiwanese_songs.png" \
+            --output android/app/src/main/res/drawable-nodpi/taiwanese_songs_icon.png
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
