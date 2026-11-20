@@ -349,7 +349,7 @@ private suspend fun fetchJsonpResponse(
 ): String = withTimeout(30_000L) {
     withContext(Dispatchers.Main) {
         suspendCancellableCoroutine { continuation ->
-            val webView = WebView(context.applicationContext)
+            val webView = WebView(context)
             webView.settings.javaScriptEnabled = true
             
             fun finishWithResult(result: String?, error: Throwable?) {
