@@ -1,5 +1,10 @@
 package com.embassysubtle1g.taiwanesesongs
 
+import android.content.pm.ActivityInfo
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -131,12 +136,32 @@ class MainActivity : ComponentActivity() {
                                     }
                                     customView = view
                                     customViewCallback = callback
+
+                                    // 1. 隱藏狀態列與導覽列（沉浸式全螢幕）
+                                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                                        hide(WindowInsetsCompat.Type.systemBars())
+                                        systemBarsBehavior =
+                                            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                                    }
+
+                                    // 2. 解除方向鎖定，允許直向與橫向隨手機擺放自動旋轉
+                                    this@MainActivity.requestedOrientation =
+                                        ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
                                 }
 
                                 override fun onHideCustomView() {
                                     customView = null
                                     customViewCallback?.onCustomViewHidden()
                                     customViewCallback = null
+
+                                    // 1. 恢復顯示狀態列與導覽列
+                                    WindowCompat.getInsetsController(window, window.decorView).show(
+                                        WindowInsetsCompat.Type.systemBars()
+                                    )
+
+                                    // 2. 退出全螢幕後恢復為直向歌單模式
+                                    this@MainActivity.requestedOrientation =
+                                        ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                                 }
                             }
 
